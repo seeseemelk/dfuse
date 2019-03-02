@@ -33,9 +33,10 @@ import core.sys.posix.pthread;
 private int threadAttached = false;
 private pthread_cleanup cleanup;
 
-extern(C) void detach(void* ptr) nothrow
+extern (C) void detach(void* ptr) nothrow
 {
     import std.exception;
+
     collectException(thread_detachThis());
 }
 
@@ -83,100 +84,83 @@ private auto call(alias fn)()
  * Note that we convert our * char pointer to an array using the
  * ptr[0..len] syntax.
  */
-extern(System)
+extern (System)
 {
     private int dfuse_access(const char* path, int mode)
     {
-        return call!(
-            (Operations t)
+        return call!((Operations t) {
+            if (t.access(path[0 .. path.strlen], mode))
             {
-                if(t.access(path[0..path.strlen], mode))
-                {
-                    return 0;
-                }
-                return -1;
-            })();
+                return 0;
+            }
+            return -1;
+        })();
     }
 
-    private int dfuse_getattr(const char*  path, stat_t* st)
+    private int dfuse_getattr(const char* path, stat_t* st)
     {
-        return call!(
-            (Operations t)
-            {
-                t.getattr(path[0..path.strlen], *st);
-                return 0;
-            })();
+        return call!((Operations t) {
+            t.getattr(path[0 .. path.strlen], *st);
+            return 0;
+        })();
     }
 
     private int dfuse_readdir(const char* path, void* buf,
             fuse_fill_dir_t filler, off_t offset, fuse_file_info* fi)
     {
-        return call!(
-            (Operations t)
+        return call!((Operations t) {
+            foreach (file; t.readdir(path[0 .. path.strlen]))
             {
-                foreach(file; t.readdir(path[0..path.strlen]))
-                {
-                    filler(buf, cast(char*) toStringz(file), null, 0);
-                }
-                return 0;
-            })();
+                filler(buf, cast(char*) toStringz(file), null, 0);
+            }
+            return 0;
+        })();
     }
 
     private int dfuse_readlink(const char* path, char* buf, size_t size)
     {
-        return call!(
-            (Operations t)
-            {
-                auto length = t.readlink(path[0..path.strlen],
-                    (cast(ubyte*)buf)[0..size]);
-                /* Null-terminate the string and copy it over to the buffer. */
-                assert(length <= size);
-                buf[length] = '\0';
+        return call!((Operations t) {
+            auto length = t.readlink(path[0 .. path.strlen], (cast(ubyte*) buf)[0 .. size]);
+            /* Null-terminate the string and copy it over to the buffer. */
+            assert(length <= size);
+            buf[length] = '\0';
 
-                return 0;
-            })();
+            return 0;
+        })();
     }
 
     private int dfuse_read(const char* path, char* buf, size_t size,
-                           off_t offset, fuse_file_info* fi)
+            off_t offset, fuse_file_info* fi)
     {
         /* Ensure at compile time that off_t and size_t fit into an ulong. */
         static assert(ulong.max >= size_t.max);
         static assert(ulong.max >= off_t.max);
 
-        return call!(
-            (Operations t)
-            {
-                auto bbuf = cast(ubyte*) buf;
-                return cast(int) t.read(path[0..path.strlen], bbuf[0..size],
-                    to!ulong(offset));
-            })();
+        return call!((Operations t) {
+            auto bbuf = cast(ubyte*) buf;
+            return cast(int) t.read(path[0 .. path.strlen], bbuf[0 .. size], to!ulong(offset));
+        })();
     }
 
     private int dfuse_write(const char* path, char* data, size_t size,
-                            off_t offset, fuse_file_info* fi)
+            off_t offset, fuse_file_info* fi)
     {
         static assert(ulong.max >= size_t.max);
         static assert(ulong.max >= off_t.max);
 
-        return call!(
-            (Operations t)
-            {
-                auto bdata = cast(ubyte*) data;
-                return t.write(path[0..path.strlen], bdata[0..size],
-                    to!ulong(offset));
-            })();
+        return call!((Operations t) {
+            auto bdata = cast(ubyte*) data;
+            return t.write(path[0 .. path.strlen], bdata[0 .. size], to!ulong(offset));
+        })();
     }
 
     private int dfuse_truncate(const char* path, off_t length)
     {
         static assert(ulong.max >= off_t.max);
-        return call!(
-            (Operations t)
-            {
-                t.truncate(path[0..path.strlen], to!ulong(length));
-                return 0;
-            })();
+        return call!((Operations t) {
+            t.truncate(path[0 .. path.strlen], to!ulong(length));
+            return 0;
+        })();
     }
 
     private void* dfuse_init(fuse_conn_info* conn)
@@ -193,7 +177,8 @@ extern(System)
            threads from the runtime because after fuse_main finishes the pthreads
            are joined. We circumvent that problem by just exiting while our
            threads still run. */
-        import std.c.process;
+        import core.stdc.stdlib : exit;
+
         exit(0);
     }
 } /* extern(C) */
@@ -201,8 +186,7 @@ extern(System)
 export class FuseException : Exception
 {
     public int errno;
-    this(int errno, string file = __FILE__, size_t line = __LINE__,
-         Throwable next = null)
+    this(int errno, string file = __FILE__, size_t line = __LINE__, Throwable next = null)
     {
         super("Fuse Exception", file, line, next);
         this.errno = errno;
@@ -336,21 +320,21 @@ public:
 
     void mount(Operations ops, const string mountpoint, string[] mountopts)
     {
-        string [] args = [this.fsname];
+        string[] args = [this.fsname];
 
         args ~= mountpoint;
 
-        if(mountopts.length > 0)
+        if (mountopts.length > 0)
         {
             args ~= format("-o%s", mountopts.join(","));
         }
 
-        if(this.foreground)
+        if (this.foreground)
         {
             args ~= "-f";
         }
 
-        if(!this.threaded)
+        if (!this.threaded)
         {
             args ~= "-s";
         }
@@ -372,11 +356,12 @@ public:
         /* Create c-style arguments from a string[] array. */
         auto cargs = array(map!(a => toStringz(a))(args));
         int length = cast(int) cargs.length;
-        static if(length.max < cargs.length.max)
+        static if (length.max < cargs.length.max)
         {
             /* This is an unsafe cast that we need to do for C compat.
                Enforce unlike assert will be checked in opt-builds as well. */
             import std.exception : enforce;
+
             enforce(length >= 0);
             enforce(length == cargs.length);
         }
